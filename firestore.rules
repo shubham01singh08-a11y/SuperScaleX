@@ -1,0 +1,133 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // SuperScaleX Digital Growth Engine - Production Security Rules
+    // ===============================================================
+    // Assumed Data Models:
+    // 1. /audits/{auditId}
+    //    - Public create: Leads booking a 360 Diagnostic Audit
+    //    - Restricted read/write: Admin only
+    // 2. /calculator_leads/{leadId}
+    //    - Public create: Leads saving custom 90-day ROI projections
+    //    - Restricted read/write: Admin only
+    // 3. /subscribers/{subscriberId}
+    //    - Public create: Leads downloading the 8-Figure Scale Blueprint
+    //    - Restricted read/write: Admin only
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+             (request.auth.token.get('admin', false) == true || 
+              request.auth.token.get('role', '') == 'admin');
+    }
+
+    function hasAllRequired(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowed(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidEmail(email) {
+      return isValidString(email, 5, 150) &&
+             email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    // ---------------------------------------------------------------
+    // 1. Audits Collection (/audits)
+    // ---------------------------------------------------------------
+    function isValidAuditCreate() {
+      let data = request.resource.data;
+      return hasAllRequired([
+        'companyName', 'websiteUrl', 'businessType', 
+        'monthlyRevenue', 'primaryBottleneck', 'fullName', 
+        'workEmail', 'status', 'source'
+      ]) &&
+      hasOnlyAllowed([
+        'companyName', 'websiteUrl', 'businessType', 
+        'monthlyRevenue', 'primaryBottleneck', 'fullName', 
+        'workEmail', 'phone', 'notes', 'submittedAt', 
+        'createdAt', 'status', 'source'
+      ]) &&
+      isValidString(data.companyName, 1, 150) &&
+      isValidString(data.websiteUrl, 1, 200) &&
+      isValidString(data.fullName, 1, 100) &&
+      isValidEmail(data.workEmail) &&
+      data.status == 'new_inquiry' &&
+      data.source == 'website_hero_audit_modal' &&
+      data.businessType in ['ecommerce', 'saas', 'services', 'other'] &&
+      data.monthlyRevenue in ['under_$25k', '$25k-$50k', '$50k-$100k', '$100k-$250k', '$250k+'] &&
+      data.primaryBottleneck in ['conversion_leak', 'manual_ops', 'ad_fatigue', 'all_three'] &&
+      (!('phone' in data) || isValidString(data.phone, 0, 50)) &&
+      (!('notes' in data) || isValidString(data.notes, 0, 1000));
+    }
+
+    match /audits/{auditId} {
+      allow create: if isValidAuditCreate();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 2. Calculator Leads Collection (/calculator_leads)
+    // ---------------------------------------------------------------
+    function isValidCalculatorLeadCreate() {
+      let data = request.resource.data;
+      return hasAllRequired(['email', 'projectedRevenue', 'type']) &&
+      hasOnlyAllowed([
+        'company', 'email', 'adSpend', 'currentRevenue', 
+        'currentCvr', 'projectedRevenue', 'monthlyGain', 
+        'ninetyDayGain', 'createdAt', 'type'
+      ]) &&
+      isValidEmail(data.email) &&
+      data.type == 'roi_calculator_capture' &&
+      data.projectedRevenue is number && data.projectedRevenue >= 0 &&
+      (!('company' in data) || isValidString(data.company, 0, 150)) &&
+      (!('adSpend' in data) || (data.adSpend is number && data.adSpend >= 0)) &&
+      (!('currentRevenue' in data) || (data.currentRevenue is number && data.currentRevenue >= 0)) &&
+      (!('currentCvr' in data) || (data.currentCvr is number && data.currentCvr >= 0 && data.currentCvr <= 100)) &&
+      (!('monthlyGain' in data) || (data.monthlyGain is number && data.monthlyGain >= 0)) &&
+      (!('ninetyDayGain' in data) || (data.ninetyDayGain is number && data.ninetyDayGain >= 0));
+    }
+
+    match /calculator_leads/{leadId} {
+      allow create: if isValidCalculatorLeadCreate();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // 3. Subscribers Collection (/subscribers)
+    // ---------------------------------------------------------------
+    function isValidSubscriberCreate() {
+      let data = request.resource.data;
+      return hasAllRequired(['email', 'source']) &&
+      hasOnlyAllowed(['email', 'source', 'createdAt']) &&
+      isValidEmail(data.email) &&
+      data.source in ['blueprint_download', 'newsletter', 'website'];
+    }
+
+    match /subscribers/{subscriberId} {
+      allow create: if isValidSubscriberCreate();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------
+    // Default Fallback: Deny everything else
+    // ---------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
